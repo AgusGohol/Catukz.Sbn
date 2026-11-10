@@ -1,4 +1,6 @@
 target/
+dist/
+build-stage/
 dependency-reduced-pom.xml
 *.class
 .idea/

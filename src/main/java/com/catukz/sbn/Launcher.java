@@ -6,6 +6,8 @@ package com.catukz.sbn;
  */
 public class Launcher {
     public static void main(String[] args) {
+        // Perbaiki bug WebView "Unable to establish loopback connection" (HTTP/2 loader)
+        System.setProperty("com.sun.webkit.useHTTP2Loader", "false");
         App.main(args);
     }
 }

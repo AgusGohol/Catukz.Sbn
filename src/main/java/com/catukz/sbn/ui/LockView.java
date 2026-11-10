@@ -20,6 +20,18 @@ public class LockView {
         root.setPadding(new Insets(40));
         root.getStyleClass().add("lock-root");
 
+        javafx.scene.Node mark;
+        try {
+            javafx.scene.image.ImageView iv = new javafx.scene.image.ImageView(
+                    new javafx.scene.image.Image(getClass().getResourceAsStream("/logo.png"), 72, 72, true, true));
+            iv.setFitWidth(72);
+            iv.setFitHeight(72);
+            mark = iv;
+        } catch (Exception e) {
+            Label m = new Label("C");
+            m.getStyleClass().add("logo-mark-lg");
+            mark = m;
+        }
         Label logo = new Label("Catukz.Sbn");
         logo.getStyleClass().add("logo");
         Label sub = new Label("Music Distributor Dashboard");
@@ -70,7 +82,9 @@ public class LockView {
         card.setMaxWidth(380);
         card.setPadding(new Insets(28));
 
-        root.getChildren().addAll(logo, sub, card);
+        VBox gap = new VBox(6, logo, sub);
+        gap.setAlignment(Pos.CENTER);
+        root.getChildren().addAll(mark, gap, card);
     }
 
     public Parent getRoot() { return root; }

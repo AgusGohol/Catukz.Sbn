@@ -18,6 +18,8 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 
 import javax.crypto.SecretKey;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 public class MainView {
     private final BorderPane root = new BorderPane();
@@ -28,14 +30,17 @@ public class MainView {
     private final HBox chipBar = new HBox(8);
     private final StackPane content = new StackPane();
     private final ToggleGroup chipGroup = new ToggleGroup();
+    private final Map<String, Button> navButtons = new LinkedHashMap<>();
+    private final com.catukz.sbn.scrape.AutoSync autoSync;
 
     private String selectedDistributor = null; // null = Semua
     private String nav = "dashboard";
 
-    public MainView(Database db, SecretKey key, Vault vault, Runnable onLock) {
+    public MainView(Database db, SecretKey key, Vault vault, Runnable onLock, com.catukz.sbn.scrape.AutoSync autoSync) {
         this.db = db;
         this.key = key;
         this.onLock = onLock;
+        this.autoSync = autoSync;
         root.getStyleClass().add("main-root");
         root.setLeft(buildSidebar());
         root.setCenter(buildCenter());
@@ -43,26 +48,33 @@ public class MainView {
     }
 
     private VBox buildSidebar() {
-        VBox side = new VBox(4);
+        VBox side = new VBox(5);
         side.getStyleClass().add("sidebar");
-        side.setPadding(new Insets(16, 12, 16, 12));
-        side.setPrefWidth(180);
+        side.setPadding(new Insets(18, 14, 18, 14));
+        side.setPrefWidth(200);
 
-        Label brand = new Label("♪  Catukz.Sbn");
+        javafx.scene.Node mark = logoMark(30);
+        Label brand = new Label("Catukz.Sbn");
         brand.getStyleClass().add("brand");
-        brand.setPadding(new Insets(4, 8, 16, 8));
+        HBox brandBox = new HBox(10, mark, brand);
+        brandBox.setAlignment(Pos.CENTER_LEFT);
+        brandBox.getStyleClass().add("brand-box");
+
+        Label menuLabel = new Label("MENU");
+        menuLabel.getStyleClass().add("section-label");
 
         Region spacer = new Region();
         VBox.setVgrow(spacer, Priority.ALWAYS);
 
-        Button lock = new Button("🔒  Kunci");
+        Button lock = new Button("Kunci aplikasi");
         lock.getStyleClass().add("nav-btn");
         lock.setMaxWidth(Double.MAX_VALUE);
         lock.setAlignment(Pos.CENTER_LEFT);
         lock.setOnAction(e -> onLock.run());
 
         side.getChildren().addAll(
-                brand,
+                brandBox,
+                menuLabel,
                 navButton("Dashboard", "dashboard"),
                 navButton("Upload music", "upload"),
                 navButton("Import CSV", "import"),
@@ -70,6 +82,7 @@ public class MainView {
                 navButton("Settings", "settings"),
                 spacer,
                 lock);
+        setActiveNav("dashboard");
         return side;
     }
 
@@ -78,8 +91,30 @@ public class MainView {
         b.getStyleClass().add("nav-btn");
         b.setMaxWidth(Double.MAX_VALUE);
         b.setAlignment(Pos.CENTER_LEFT);
-        b.setOnAction(e -> { nav = id; render(); });
+        b.setOnAction(e -> { setActiveNav(id); nav = id; render(); });
+        navButtons.put(id, b);
         return b;
+    }
+
+    private javafx.scene.Node logoMark(double size) {
+        try {
+            javafx.scene.image.ImageView iv = new javafx.scene.image.ImageView(
+                    new javafx.scene.image.Image(getClass().getResourceAsStream("/logo.png"), size, size, true, true));
+            iv.setFitWidth(size);
+            iv.setFitHeight(size);
+            return iv;
+        } catch (Exception e) {
+            Label l = new Label("C");
+            l.getStyleClass().add("logo-mark");
+            return l;
+        }
+    }
+
+    private void setActiveNav(String id) {
+        for (Map.Entry<String, Button> e : navButtons.entrySet()) {
+            e.getValue().getStyleClass().remove("active");
+            if (e.getKey().equals(id)) e.getValue().getStyleClass().add("active");
+        }
     }
 
     private VBox buildCenter() {
@@ -106,12 +141,28 @@ public class MainView {
         ToggleButton t = new ToggleButton(text);
         t.setToggleGroup(chipGroup);
         t.getStyleClass().add("chip");
+        t.setUserData(distributor);
         t.setOnAction(e -> {
             if (!t.isSelected()) { t.setSelected(true); return; }
             selectedDistributor = distributor;
             if (nav.equals("dashboard")) render();
         });
         return t;
+    }
+
+    /** Dipanggil saat user mengklik sebuah akun di panel Akun. */
+    public void selectDistributor(String dist) {
+        selectedDistributor = dist;
+        for (javafx.scene.Node n : chipBar.getChildren()) {
+            if (n instanceof ToggleButton tb) {
+                boolean match = (dist == null && tb.getUserData() == null)
+                        || (dist != null && dist.equals(tb.getUserData()));
+                tb.setSelected(match);
+            }
+        }
+        nav = "dashboard";
+        setActiveNav("dashboard");
+        render();
     }
 
     private void render() {
@@ -121,10 +172,10 @@ public class MainView {
     private Parent buildContentForNav() {
         switch (nav) {
             case "import":   return new ImportView(db).getRoot();
-            case "akun":     return new AccountView(db, key).getRoot();
-            case "settings": return new SettingsView(db).getRoot();
+            case "akun":     return new AccountView(db, key, selectedDistributor).getRoot();
+            case "settings": return new SettingsView(db, autoSync).getRoot();
             case "upload":   return uploadPlaceholder();
-            default:         return new DashboardView(db, selectedDistributor).getRoot();
+            default:         return new DashboardView(db, selectedDistributor, key, this::render, this::selectDistributor).getRoot();
         }
     }
 

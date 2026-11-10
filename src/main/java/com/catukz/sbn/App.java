@@ -4,10 +4,10 @@ import com.catukz.sbn.db.Database;
 import com.catukz.sbn.security.Vault;
 import com.catukz.sbn.ui.LockView;
 import com.catukz.sbn.ui.MainView;
-import com.catukz.sbn.util.SampleData;
 import javafx.application.Application;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
+import javafx.scene.image.Image;
 import javafx.stage.Stage;
 
 import javax.crypto.SecretKey;
@@ -25,8 +25,11 @@ public class App extends Application {
         this.db = new Database();
         this.vault = new Vault(db);
         stage.setTitle("Catukz.Sbn — Music Distributor Dashboard");
-        stage.setWidth(1100);
-        stage.setHeight(680);
+        try {
+            stage.getIcons().add(new Image(getClass().getResourceAsStream("/logo.png")));
+        } catch (Exception ignore) {}
+        stage.setWidth(1120);
+        stage.setHeight(700);
         showLock();
         stage.show();
     }
@@ -37,8 +40,10 @@ public class App extends Application {
     }
 
     private void onUnlocked(SecretKey key) {
-        SampleData.seedIfEmpty(db);
-        MainView main = new MainView(db, key, vault, this::showLock);
+        db.purgeSampleData();
+        com.catukz.sbn.scrape.AutoSync autoSync = new com.catukz.sbn.scrape.AutoSync(db, key);
+        autoSync.start();
+        MainView main = new MainView(db, key, vault, this::showLock, autoSync);
         setRoot(main.getRoot());
     }
 
@@ -55,6 +60,7 @@ public class App extends Application {
     }
 
     public static void main(String[] args) {
+        System.setProperty("com.sun.webkit.useHTTP2Loader", "false");
         launch(args);
     }
 }

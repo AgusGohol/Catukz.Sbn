@@ -4,6 +4,7 @@ import java.time.LocalDate;
 
 public class Release {
     public long id;
+    public long accountId; // 0 = tidak terkait akun tertentu (data lama)
     public String distributor;
     public String title;
     public String artist;

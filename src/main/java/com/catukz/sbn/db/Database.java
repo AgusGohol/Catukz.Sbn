@@ -43,6 +43,18 @@ public class Database {
             s.execute("CREATE TABLE IF NOT EXISTS releases (id INTEGER PRIMARY KEY AUTOINCREMENT, distributor TEXT, title TEXT, artist TEXT, status TEXT, release_date TEXT, streams INTEGER, earnings REAL)");
             s.execute("CREATE TABLE IF NOT EXISTS mappings (distributor TEXT, app_col TEXT, file_col TEXT, PRIMARY KEY(distributor, app_col))");
         }
+        // Migrasi: kolom account_id agar data bisa difilter per akun.
+        addColumnIfMissing("earnings", "account_id", "INTEGER");
+        addColumnIfMissing("releases", "account_id", "INTEGER");
+    }
+
+    private void addColumnIfMissing(String table, String col, String type) {
+        try (ResultSet rs = conn.getMetaData().getColumns(null, null, table, col)) {
+            if (rs.next()) return; // sudah ada
+        } catch (SQLException ignore) {}
+        try (Statement s = conn.createStatement()) {
+            s.execute("ALTER TABLE " + table + " ADD COLUMN " + col + " " + type);
+        } catch (SQLException ignore) {}
     }
 
     // ---------- meta ----------
@@ -111,7 +123,7 @@ public class Database {
     // ---------- earnings ----------
     public void addEarning(Earning e) {
         try (PreparedStatement p = conn.prepareStatement(
-                "INSERT INTO earnings(distributor,date,track,platform,country,streams,amount,currency) VALUES(?,?,?,?,?,?,?,?)")) {
+                "INSERT INTO earnings(distributor,date,track,platform,country,streams,amount,currency,account_id) VALUES(?,?,?,?,?,?,?,?,?)")) {
             p.setString(1, e.distributor);
             p.setString(2, e.date == null ? null : e.date.toString());
             p.setString(3, e.track);
@@ -120,8 +132,116 @@ public class Database {
             p.setLong(6, e.streams);
             p.setDouble(7, e.amount);
             p.setString(8, e.currency);
+            if (e.accountId > 0) p.setLong(9, e.accountId); else p.setNull(9, java.sql.Types.INTEGER);
             p.executeUpdate();
         } catch (SQLException ex) { throw new RuntimeException(ex); }
+    }
+
+    public void deleteEarningsForAccount(long accountId) {
+        try (PreparedStatement p = conn.prepareStatement("DELETE FROM earnings WHERE account_id=?")) {
+            p.setLong(1, accountId);
+            p.executeUpdate();
+        } catch (SQLException e) { throw new RuntimeException(e); }
+    }
+
+    public void deleteReleasesForAccount(long accountId) {
+        try (PreparedStatement p = conn.prepareStatement("DELETE FROM releases WHERE account_id=?")) {
+            p.setLong(1, accountId);
+            p.executeUpdate();
+        } catch (SQLException e) { throw new RuntimeException(e); }
+    }
+
+    /** Hapus data lama distributor yang belum punya account_id (migrasi dari model lama). */
+    public void deleteLegacyData(String distributor) {
+        try (PreparedStatement p = conn.prepareStatement("DELETE FROM earnings WHERE distributor=? AND account_id IS NULL")) {
+            p.setString(1, distributor); p.executeUpdate();
+        } catch (SQLException e) { throw new RuntimeException(e); }
+        try (PreparedStatement p = conn.prepareStatement("DELETE FROM releases WHERE distributor=? AND account_id IS NULL")) {
+            p.setString(1, distributor); p.executeUpdate();
+        } catch (SQLException e) { throw new RuntimeException(e); }
+    }
+
+    // ---------- query per akun ----------
+    public long totalStreamsForAccount(long accountId) {
+        return (long) aggAccount("SELECT COALESCE(SUM(streams),0) FROM earnings WHERE account_id=?", accountId);
+    }
+    public double totalAmountForAccount(long accountId) {
+        return aggAccount("SELECT COALESCE(SUM(amount),0) FROM earnings WHERE account_id=?", accountId);
+    }
+    private double aggAccount(String sql, long accountId) {
+        try (PreparedStatement p = conn.prepareStatement(sql)) {
+            p.setLong(1, accountId);
+            ResultSet rs = p.executeQuery();
+            rs.next();
+            return rs.getDouble(1);
+        } catch (SQLException e) { throw new RuntimeException(e); }
+    }
+
+    public int countReleasesForAccount(long accountId) {
+        try (PreparedStatement p = conn.prepareStatement("SELECT COUNT(*) FROM releases WHERE account_id=?")) {
+            p.setLong(1, accountId);
+            ResultSet rs = p.executeQuery();
+            rs.next();
+            return rs.getInt(1);
+        } catch (SQLException e) { throw new RuntimeException(e); }
+    }
+
+    public Map<String, Double> amountByMonthForAccount(long accountId) {
+        Map<String, Double> m = new LinkedHashMap<>();
+        String sql = "SELECT substr(date,1,7) ym, SUM(amount) FROM earnings WHERE account_id=? GROUP BY ym ORDER BY ym";
+        try (PreparedStatement p = conn.prepareStatement(sql)) {
+            p.setLong(1, accountId);
+            ResultSet rs = p.executeQuery();
+            while (rs.next()) { String ym = rs.getString(1); if (ym != null) m.put(ym, rs.getDouble(2)); }
+        } catch (SQLException e) { throw new RuntimeException(e); }
+        return m;
+    }
+
+    public List<Release> listReleasesForAccount(long accountId) {
+        List<Release> out = new ArrayList<>();
+        String sql = "SELECT id,distributor,title,artist,status,release_date,streams,earnings FROM releases WHERE account_id=? ORDER BY release_date DESC";
+        try (PreparedStatement p = conn.prepareStatement(sql)) {
+            p.setLong(1, accountId);
+            ResultSet rs = p.executeQuery();
+            while (rs.next()) {
+                Release r = new Release();
+                r.id = rs.getLong(1); r.distributor = rs.getString(2); r.title = rs.getString(3);
+                r.artist = rs.getString(4); r.status = rs.getString(5);
+                String d = rs.getString(6); r.releaseDate = d == null ? null : LocalDate.parse(d);
+                r.streams = rs.getLong(7); r.earnings = rs.getDouble(8);
+                out.add(r);
+            }
+        } catch (SQLException e) { throw new RuntimeException(e); }
+        return out;
+    }
+
+    public List<ArtistStat> listArtistsForAccount(long accountId) {
+        List<ArtistStat> out = new ArrayList<>();
+        String sql = "SELECT COALESCE(NULLIF(artist,''),'-') a, SUM(streams), SUM(earnings), COUNT(*) FROM releases WHERE account_id=? GROUP BY a ORDER BY SUM(streams) DESC";
+        try (PreparedStatement p = conn.prepareStatement(sql)) {
+            p.setLong(1, accountId);
+            ResultSet rs = p.executeQuery();
+            while (rs.next()) {
+                ArtistStat s = new ArtistStat();
+                s.artist = rs.getString(1); s.streams = rs.getLong(2); s.earnings = rs.getDouble(3); s.tracks = rs.getInt(4);
+                out.add(s);
+            }
+        } catch (SQLException e) { throw new RuntimeException(e); }
+        return out;
+    }
+
+    public void deleteEarningsFor(String distributor) {
+        try (PreparedStatement p = conn.prepareStatement("DELETE FROM earnings WHERE distributor=?")) {
+            p.setString(1, distributor);
+            p.executeUpdate();
+        } catch (SQLException e) { throw new RuntimeException(e); }
+    }
+
+    public void deleteReleasesFor(String distributor) {
+        try (PreparedStatement p = conn.prepareStatement("DELETE FROM releases WHERE distributor=?")) {
+            p.setString(1, distributor);
+            p.executeUpdate();
+        } catch (SQLException e) { throw new RuntimeException(e); }
     }
 
     public int countEarnings() {
@@ -178,7 +298,7 @@ public class Database {
     // ---------- releases ----------
     public void addRelease(Release r) {
         try (PreparedStatement p = conn.prepareStatement(
-                "INSERT INTO releases(distributor,title,artist,status,release_date,streams,earnings) VALUES(?,?,?,?,?,?,?)")) {
+                "INSERT INTO releases(distributor,title,artist,status,release_date,streams,earnings,account_id) VALUES(?,?,?,?,?,?,?,?)")) {
             p.setString(1, r.distributor);
             p.setString(2, r.title);
             p.setString(3, r.artist);
@@ -186,6 +306,7 @@ public class Database {
             p.setString(5, r.releaseDate == null ? null : r.releaseDate.toString());
             p.setLong(6, r.streams);
             p.setDouble(7, r.earnings);
+            if (r.accountId > 0) p.setLong(8, r.accountId); else p.setNull(8, java.sql.Types.INTEGER);
             p.executeUpdate();
         } catch (SQLException e) { throw new RuntimeException(e); }
     }
@@ -220,6 +341,73 @@ public class Database {
                 r.streams = rs.getLong(7);
                 r.earnings = rs.getDouble(8);
                 out.add(r);
+            }
+        } catch (SQLException e) { throw new RuntimeException(e); }
+        return out;
+    }
+
+    /** Hapus data contoh (sample) bawaan agar tidak mencemari data asli hasil sync. */
+    public void purgeSampleData() {
+        if ("done".equals(getMeta("sample.purged"))) return;
+        String[] sampleTracks = {"Senja Kota", "Lampu Merah", "Rindu Berat", "Satu Kali", "Nanti Saja"};
+        try {
+            // Rilisan contoh selalu memakai artis "Catukz".
+            try (PreparedStatement p = conn.prepareStatement("DELETE FROM releases WHERE artist=?")) {
+                p.setString(1, "Catukz");
+                p.executeUpdate();
+            }
+            // Earning contoh: judul lagu fiktif di atas (mata uang USD).
+            try (PreparedStatement p = conn.prepareStatement(
+                    "DELETE FROM earnings WHERE track=? AND currency='USD'")) {
+                for (String t : sampleTracks) { p.setString(1, t); p.executeUpdate(); }
+            }
+            setMeta("sample.purged", "done");
+        } catch (SQLException e) { throw new RuntimeException(e); }
+    }
+
+    // ---------- artis (agregasi dari releases) ----------
+    public static class ArtistStat {
+        public String artist;
+        public long streams;
+        public double earnings;
+        public int tracks;
+    }
+
+    public List<ArtistStat> listArtists(String distributor) {
+        List<ArtistStat> out = new ArrayList<>();
+        String sql = "SELECT COALESCE(NULLIF(artist,''),'-') a, SUM(streams), SUM(earnings), COUNT(*) FROM releases"
+                + (distributor == null ? "" : " WHERE distributor=?")
+                + " GROUP BY a ORDER BY SUM(streams) DESC";
+        try (PreparedStatement p = conn.prepareStatement(sql)) {
+            if (distributor != null) p.setString(1, distributor);
+            ResultSet rs = p.executeQuery();
+            while (rs.next()) {
+                ArtistStat s = new ArtistStat();
+                s.artist = rs.getString(1);
+                s.streams = rs.getLong(2);
+                s.earnings = rs.getDouble(3);
+                s.tracks = rs.getInt(4);
+                out.add(s);
+            }
+        } catch (SQLException e) { throw new RuntimeException(e); }
+        return out;
+    }
+
+    public List<Account> listAccounts(String distributor) {
+        if (distributor == null) return listAccounts();
+        List<Account> out = new ArrayList<>();
+        try (PreparedStatement p = conn.prepareStatement(
+                "SELECT id,distributor,label,email,last_sync FROM accounts WHERE distributor=? ORDER BY email")) {
+            p.setString(1, distributor);
+            ResultSet rs = p.executeQuery();
+            while (rs.next()) {
+                Account a = new Account();
+                a.id = rs.getLong(1);
+                a.distributor = rs.getString(2);
+                a.label = rs.getString(3);
+                a.email = rs.getString(4);
+                a.lastSync = rs.getString(5);
+                out.add(a);
             }
         } catch (SQLException e) { throw new RuntimeException(e); }
         return out;
