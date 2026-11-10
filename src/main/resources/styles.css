@@ -258,6 +258,16 @@
 .default-color0.chart-bar { -fx-bar-fill: #EC4899; }
 .stream-chart .chart-bar { -fx-bar-fill: #34D399; }
 .stream-chart .default-color0.chart-bar { -fx-bar-fill: #34D399; }
+/* Mode garis untuk grafik stream */
+.stream-chart .chart-series-line { -fx-stroke: #34D399; -fx-stroke-width: 2.5px; }
+.stream-chart .default-color0.chart-series-line { -fx-stroke: #34D399; }
+.stream-chart .chart-line-symbol { -fx-background-color: #34D399, white; -fx-background-insets: 0, 2; }
+
+/* Toggle Batang/Garis (segmented) */
+.seg { -fx-background-color: #3A1230; -fx-background-radius: 9; -fx-border-color: #A23E6E; -fx-border-width: 1; -fx-border-radius: 9; -fx-padding: 2; }
+.seg-btn { -fx-background-color: transparent; -fx-background-radius: 7; -fx-text-fill: #D9B9CC; -fx-font-size: 12px; -fx-padding: 4 12; -fx-cursor: hand; }
+.seg-btn:hover { -fx-text-fill: #F4E9EE; }
+.seg-btn:selected { -fx-background-color: #EC4899; -fx-text-fill: white; }
 
 /* Tooltip grafik (gelap, seperti referensi) */
 .chart-tip {

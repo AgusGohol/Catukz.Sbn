@@ -49,7 +49,7 @@ public class SyncEngine {
         Thread t = new Thread(() -> {
             Account acc = findAccountById(accountId);
             if (acc == null) { l.done(false, "Akun tidak ditemukan."); return; }
-            runSync(acc, headless, l);
+            runWithFallback(acc, headless, l);
         }, "sync-acct-" + accountId);
         t.setDaemon(true);
         t.start();
@@ -60,20 +60,24 @@ public class SyncEngine {
         Thread t = new Thread(() -> {
             Account acc = findAccount(distributor);
             if (acc == null) { l.done(false, "Belum ada akun " + distributor + ". Tambah dulu di menu Akun."); return; }
-            runSync(acc, headless, l);
+            runWithFallback(acc, headless, l);
         }, "sync-" + distributor);
         t.setDaemon(true);
         t.start();
     }
 
-    private void runSync(Account acc, boolean headless, Listener l) {
+    // Kode hasil runSync: DONE = selesai (l.done sudah dipanggil); LOGIN_REQUIRED = butuh login/verifikasi berjendela.
+    private static final int DONE = 0;
+    private static final int LOGIN_REQUIRED = 1;
+
+    private int runSync(Account acc, boolean headless, Listener l) {
         final String distributor = acc.distributor;
         final long accountId = acc.id;
         Recipe r = Recipe.get(distributor);
-        if (r == null) { l.done(false, "Resep sinkron untuk " + distributor + " belum tersedia."); return; }
+        if (r == null) { l.done(false, "Resep sinkron untuk " + distributor + " belum tersedia."); return DONE; }
         final String email = acc.email;
         final String pass = decryptPw(acc);
-        if (pass == null) { l.done(false, "Gagal membaca kredensial."); return; }
+        if (pass == null) { l.done(false, "Gagal membaca kredensial."); return DONE; }
 
         Path dir = Paths.get(System.getProperty("user.home"), ".catukz-sbn");
         logFile = dir.resolve("sync-log-" + distributor + ".txt");
@@ -83,7 +87,9 @@ public class SyncEngine {
         WebDriver driver = null;
         try {
             l.status("Menyiapkan Chrome…");
-            Path profile = dir.resolve("chrome").resolve(distributor);
+            // Profil terpisah PER AKUN: tiap akun punya memori/login Chrome sendiri,
+            // jadi beberapa akun (termasuk sesama SoundOn) tidak saling bentrok.
+            Path profile = dir.resolve("chrome").resolve(distributor + "-" + accountId);
             Files.createDirectories(profile);
 
             ChromeOptions opts = new ChromeOptions();
@@ -125,10 +131,10 @@ public class SyncEngine {
                             .until(d -> !d.getCurrentUrl().contains("/login"));
                     log("Lolos halaman login, URL = " + driver.getCurrentUrl());
                 } catch (Exception timeout) {
-                    log("TIMEOUT menunggu lolos login. URL = " + driver.getCurrentUrl());
+                    log("TIMEOUT menunggu lolos login (headless=" + headless + "). URL = " + driver.getCurrentUrl());
                     capture(js, dir, distributor, driver.getCurrentUrl());
-                    l.done(false, "Login belum selesai (mungkin butuh verifikasi). Coba lagi mode berjendela & selesaikan sekali.");
-                    return;
+                    // Jangan panggil l.done di sini: biarkan pemanggil memutuskan fallback ke jendela.
+                    return LOGIN_REQUIRED;
                 }
             }
 
@@ -256,13 +262,35 @@ public class SyncEngine {
             db.setMeta("sync." + distributor + ".lastSync", LocalDateTime.now().toString()); // legacy
             log("=== SELESAI: " + resultMsg + " ===");
             l.done(true, resultMsg);
+            return DONE;
         } catch (Exception e) {
             log("ERROR: " + e);
             l.done(false, "Gagal sync: " + shortMsg(e));
+            return DONE;
         } finally {
             if (driver != null) {
                 try { driver.quit(); } catch (Exception ignore) {}
             }
+        }
+    }
+
+    /**
+     * Jalankan sinkron headless (tanpa jendela). Jika SoundOn butuh login/verifikasi yang
+     * tak bisa diselesaikan tanpa jendela, buka Chrome berjendela SEKALI untuk login,
+     * lalu sesi tersimpan di profil akun sehingga sinkron berikutnya kembali senyap.
+     */
+    private void runWithFallback(Account acc, boolean preferHeadless, Listener l) {
+        int code = runSync(acc, preferHeadless, l);
+        if (code != LOGIN_REQUIRED) return;
+        if (!preferHeadless) {
+            // Sudah berjendela tapi tetap belum lolos — serahkan ke pengguna.
+            l.done(false, "Login belum selesai (mungkin butuh verifikasi). Selesaikan di jendela Chrome lalu coba lagi.");
+            return;
+        }
+        l.status("Butuh verifikasi — membuka jendela Chrome sekali untuk login…");
+        int code2 = runSync(acc, false, l);
+        if (code2 == LOGIN_REQUIRED) {
+            l.done(false, "Login belum selesai. Selesaikan verifikasi di jendela Chrome, lalu sinkron lagi.");
         }
     }
 

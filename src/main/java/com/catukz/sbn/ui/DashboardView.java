@@ -13,12 +13,15 @@ import javafx.scene.Parent;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.chart.BarChart;
 import javafx.scene.chart.CategoryAxis;
+import javafx.scene.chart.LineChart;
 import javafx.scene.chart.NumberAxis;
 import javafx.scene.chart.XYChart;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextInputDialog;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.control.ToggleGroup;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -118,54 +121,13 @@ public class DashboardView {
                         selAcc == null ? (distributor == null ? "Semua" : distributor) : ("#" + indexOfAccount(selAcc)),
                         "◈", "icon-amber"));
 
-        // Grafik pendapatan per bulan
-        Label chartTitle = new Label("Pendapatan per bulan");
-        chartTitle.getStyleClass().add("h2");
-        CategoryAxis x = new CategoryAxis();
-        NumberAxis y = new NumberAxis();
-        BarChart<String, Number> chart = new BarChart<>(x, y);
-        chart.setLegendVisible(false);
-        chart.setAnimated(false);
-        chart.setPrefHeight(250);
-        chart.setBarGap(2);
-        chart.setCategoryGap(18);
-        String earnCur = aEarningsCurrency(sel);
-        XYChart.Series<String, Number> series = new XYChart.Series<>();
-        for (Map.Entry<String, Double> e : aMonthly(sel).entrySet()) {
-            XYChart.Data<String, Number> d = new XYChart.Data<>(e.getKey(), Math.round(e.getValue() * 100.0) / 100.0);
-            decorateBar(d, "#EC4899", e.getKey() + "\nPendapatan: " + String.format("%,.0f", e.getValue()) + " " + earnCur);
-            series.getData().add(d);
-        }
-        chart.getData().add(series);
-        VBox chartCard = new VBox(10, chartTitle, chart);
-        chartCard.getStyleClass().add("panel");
-        chartCard.setPadding(new Insets(16));
-        HBox.setHgrow(chartCard, Priority.ALWAYS);
+        // Grafik stream akun (bisa diubah Batang/Garis)
+        VBox streamCard = buildStreamChartCard(sel);
 
-        // Grafik stream per lagu
-        Label streamTitle = new Label("Stream per lagu");
-        streamTitle.getStyleClass().add("h2");
-        CategoryAxis sx = new CategoryAxis();
-        NumberAxis sy = new NumberAxis();
-        BarChart<String, Number> streamChart = new BarChart<>(sx, sy);
-        streamChart.setLegendVisible(false);
-        streamChart.setAnimated(false);
-        streamChart.setPrefHeight(250);
-        streamChart.setCategoryGap(14);
-        streamChart.getStyleClass().add("stream-chart");
-        XYChart.Series<String, Number> sSeries = new XYChart.Series<>();
-        for (Release r : aReleases(sel)) {
-            XYChart.Data<String, Number> d = new XYChart.Data<>(shorten(r.title), r.streams);
-            decorateBar(d, "#34D399", r.title + "\nStream: " + String.format("%,d", r.streams));
-            sSeries.getData().add(d);
-        }
-        streamChart.getData().add(sSeries);
-        VBox streamCard = new VBox(10, streamTitle, streamChart);
-        streamCard.getStyleClass().add("panel");
-        streamCard.setPadding(new Insets(16));
-        HBox.setHgrow(streamCard, Priority.ALWAYS);
+        // Grafik pendapatan per bulan (dipindah ke kanan; tetap ada agar data royalti tidak hilang)
+        VBox earnCard = buildEarningsChartCard(sel);
 
-        HBox charts = new HBox(14, chartCard, streamCard);
+        HBox charts = new HBox(14, streamCard, earnCard);
 
         VBox akunTable = buildAkunTable();
 
@@ -364,6 +326,110 @@ public class DashboardView {
         }
     }
 
+    // ---------- Grafik Stream akun (Batang/Garis) ----------
+    private boolean isLineChart() { return "line".equals(db.getMeta("ui.chartType")); }
+
+    /** Kartu grafik "Stream akun": streams per lagu untuk akun terpilih, bisa ganti Batang/Garis. */
+    private VBox buildStreamChartCard(Long sel) {
+        boolean line = isLineChart();
+
+        Label title = new Label("Stream akun");
+        title.getStyleClass().add("h2");
+
+        // Toggle Batang | Garis
+        ToggleButton barBtn = new ToggleButton("Batang");
+        ToggleButton lineBtn = new ToggleButton("Garis");
+        ToggleGroup tg = new ToggleGroup();
+        barBtn.setToggleGroup(tg);
+        lineBtn.setToggleGroup(tg);
+        barBtn.getStyleClass().add("seg-btn");
+        lineBtn.getStyleClass().add("seg-btn");
+        (line ? lineBtn : barBtn).setSelected(true);
+        barBtn.setOnAction(e -> { if (isLineChart()) { db.setMeta("ui.chartType", "bar"); render(); } else barBtn.setSelected(true); });
+        lineBtn.setOnAction(e -> { if (!isLineChart()) { db.setMeta("ui.chartType", "line"); render(); } else lineBtn.setSelected(true); });
+        HBox seg = new HBox(barBtn, lineBtn);
+        seg.getStyleClass().add("seg");
+        seg.setAlignment(Pos.CENTER_RIGHT);
+
+        Region sp = new Region();
+        HBox.setHgrow(sp, Priority.ALWAYS);
+        HBox head = new HBox(10, title, sp, seg);
+        head.setAlignment(Pos.CENTER_LEFT);
+
+        CategoryAxis x = new CategoryAxis();
+        NumberAxis y = new NumberAxis();
+        XYChart<String, Number> chart = line ? new LineChart<>(x, y) : new BarChart<>(x, y);
+        chart.setLegendVisible(false);
+        chart.setAnimated(false);
+        chart.setPrefHeight(250);
+        chart.getStyleClass().add("stream-chart");
+        if (chart instanceof BarChart<?, ?> bc) bc.setCategoryGap(14);
+        if (chart instanceof LineChart<?, ?> lc) lc.setCreateSymbols(true);
+
+        List<Release> rels = aReleases(sel);
+        XYChart.Series<String, Number> s = new XYChart.Series<>();
+        for (Release r : rels) s.getData().add(new XYChart.Data<>(shorten(r.title), r.streams));
+        chart.getData().add(s);
+        for (int i = 0; i < s.getData().size(); i++) {
+            Release r = rels.get(i);
+            decoratePoint(s.getData().get(i), line, "#34D399", r.title + "\nStream: " + String.format("%,d", r.streams));
+        }
+
+        VBox card = new VBox(10, head, chart);
+        card.getStyleClass().add("panel");
+        card.setPadding(new Insets(16));
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    /** Kartu grafik "Pendapatan per bulan" (royalti bulanan). */
+    private VBox buildEarningsChartCard(Long sel) {
+        Label title = new Label("Pendapatan per bulan");
+        title.getStyleClass().add("h2");
+        CategoryAxis x = new CategoryAxis();
+        NumberAxis y = new NumberAxis();
+        BarChart<String, Number> chart = new BarChart<>(x, y);
+        chart.setLegendVisible(false);
+        chart.setAnimated(false);
+        chart.setPrefHeight(250);
+        chart.setBarGap(2);
+        chart.setCategoryGap(18);
+        String earnCur = aEarningsCurrency(sel);
+        XYChart.Series<String, Number> series = new XYChart.Series<>();
+        for (Map.Entry<String, Double> e : aMonthly(sel).entrySet()) {
+            XYChart.Data<String, Number> d = new XYChart.Data<>(e.getKey(), Math.round(e.getValue() * 100.0) / 100.0);
+            decorateBar(d, "#EC4899", e.getKey() + "\nPendapatan: " + String.format("%,.0f", e.getValue()) + " " + earnCur);
+            series.getData().add(d);
+        }
+        chart.getData().add(series);
+        VBox card = new VBox(10, title, chart);
+        card.getStyleClass().add("panel");
+        card.setPadding(new Insets(16));
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    /** Hiasi satu titik/batang: warna + tooltip. Mode garis mewarnai simbol, mode batang mewarnai batang. */
+    private void decoratePoint(XYChart.Data<String, Number> d, boolean line, String color, String tip) {
+        Runnable apply = () -> {
+            Node n = d.getNode();
+            if (n == null) return;
+            if (line) {
+                n.setStyle("-fx-background-color: " + color + ", white; -fx-background-insets: 0, 2; "
+                        + "-fx-background-radius: 6; -fx-padding: 5;");
+            } else {
+                n.setStyle("-fx-bar-fill: " + color + "; -fx-background-color: " + color + "; -fx-background-radius: 5 5 0 0;");
+            }
+            javafx.scene.control.Tooltip t = new javafx.scene.control.Tooltip(tip);
+            t.setShowDelay(javafx.util.Duration.millis(80));
+            t.setHideDelay(javafx.util.Duration.ZERO);
+            t.getStyleClass().add("chart-tip");
+            javafx.scene.control.Tooltip.install(n, t);
+        };
+        if (d.getNode() != null) apply.run();
+        d.nodeProperty().addListener((o, ov, nv) -> { if (nv != null) apply.run(); });
+    }
+
     /** Warnai batang + pasang tooltip langsung di node-nya (tidak bergantung parsing CSS). */
     private void decorateBar(XYChart.Data<String, Number> d, String color, String tip) {
         String style = "-fx-bar-fill: " + color + "; -fx-background-color: " + color + "; -fx-background-radius: 5 5 0 0;";
@@ -505,7 +571,7 @@ public class DashboardView {
             e.consume();
             buka.setDisable(true);
             buka.setText("Sync…");
-            new SyncEngine(db, key).sync(a.id, false, new SyncEngine.Listener() {
+            new SyncEngine(db, key).sync(a.id, true, new SyncEngine.Listener() {
                 @Override public void status(String m) { }
                 @Override public void done(boolean ok, String msg) {
                     Platform.runLater(() -> {
@@ -651,8 +717,10 @@ public class DashboardView {
                 });
             }
         };
-        if (sel != null) engine.sync((long) sel, false, listener);
-        else engine.sync(distributor, false, listener);
+        // Mode senyap (headless): tanpa jendela Chrome. Fallback otomatis buka jendela
+        // sekali bila SoundOn butuh login/verifikasi.
+        if (sel != null) engine.sync((long) sel, true, listener);
+        else engine.sync(distributor, true, listener);
     }
 
     private VBox statCard(String label, String value, String icon, String iconClass) {
